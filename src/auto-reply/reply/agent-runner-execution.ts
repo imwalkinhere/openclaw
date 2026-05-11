@@ -13,7 +13,11 @@ import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
-import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
+import {
+  runWithModelFallback,
+  isFallbackSummaryError,
+  type ModelFallbackResultClassification,
+} from "../../agents/model-fallback.js";
 import {
   isCliRuntimeAlias,
   resolveCliRuntimeExecutionProvider,
@@ -98,6 +102,19 @@ const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
 
 function shouldForceCliSessionReuseForSystemEvent(sessionCtx: TemplateContext): boolean {
   return normalizeLowercaseStringOrEmpty(sessionCtx.Provider) === "background-task-event";
+}
+
+function shouldKeepBackgroundTaskWakeOnPrimary(params: {
+  sessionCtx: TemplateContext;
+  classification: ModelFallbackResultClassification;
+}): boolean {
+  return (
+    normalizeLowercaseStringOrEmpty(params.sessionCtx.Provider) === "background-task-event" &&
+    params.classification !== null &&
+    params.classification !== undefined &&
+    "code" in params.classification &&
+    params.classification.code === "empty_result"
+  );
 }
 
 function resolveCliSessionBindingForRun(params: {
@@ -1360,6 +1377,14 @@ export async function runAgentTurnWithFallback(params: {
               blockReplyPipeline?.hasBuffered() || blockReplyPipeline?.didStream(),
             ),
           });
+          if (
+            shouldKeepBackgroundTaskWakeOnPrimary({
+              sessionCtx: params.sessionCtx,
+              classification,
+            })
+          ) {
+            return null;
+          }
           if (classification) {
             await rollbackClassifiedFallbackCandidateSelection(provider, model);
           }

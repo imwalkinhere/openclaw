@@ -997,6 +997,70 @@ describe("task-registry", () => {
     });
   });
 
+  it("retries queued task completion delivery once the owner session has delivery context", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      const task = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-session-retry-origin",
+        task: "Investigate issue",
+        status: "succeeded",
+        deliveryStatus: "session_queued",
+        startedAt: Date.now() - 100,
+        endedAt: Date.now(),
+      });
+
+      await maybeDeliverTaskTerminalUpdate(task.taskId);
+      expect(peekSystemEvents("agent:main:main")).toEqual([]);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify(
+          {
+            "agent:main:main": {
+              sessionId: "main-session",
+              deliveryContext: {
+                channel: "notifychat",
+                to: "notifychat:123",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      await runTaskRegistryMaintenance();
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-session-retry-origin")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        }),
+      );
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "notifychat",
+          to: "notifychat:123",
+          content: expect.stringContaining("Background task done: ACP background task"),
+        }),
+      );
+    });
+  });
+
   it("wakes the parent for blocked tasks even when delivery falls back to the session", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

@@ -885,7 +885,7 @@ function resolveOwnerSessionDeliveryContext(
   try {
     const cfg = getRuntimeConfig();
     const storePath = resolveStorePath(cfg.session?.store, { agentId: parsed.agentId });
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(storePath, { skipCache: true });
     return normalizeDeliveryContext(deliveryContextFromSession(store[normalizedSessionKey]));
   } catch {
     return undefined;
@@ -1157,6 +1157,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
     if (!latest || !shouldAutoDeliverTaskTerminalUpdate(latest)) {
       return latest ? cloneTaskRecord(latest) : null;
     }
+    const existingDeliveryState = getTaskDeliveryState(taskId);
     const preferred = latest.runId
       ? pickPreferredRunIdTask(getPeerTasksForDelivery(latest))
       : undefined;
@@ -1176,8 +1177,18 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         lastEventAt: Date.now(),
       });
     }
+    if (owner.requesterOrigin) {
+      upsertTaskDeliveryState({
+        taskId,
+        requesterOrigin: owner.requesterOrigin,
+        lastNotifiedEventAt: existingDeliveryState?.lastNotifiedEventAt,
+      });
+    }
     const eventText = formatTaskTerminalMessage(latest);
     if (!canDeliverTaskToRequesterOrigin(latest)) {
+      if (latest.deliveryStatus === "session_queued") {
+        return cloneTaskRecord(latest);
+      }
       try {
         queueTaskSystemEvent(latest, eventText);
         if (latest.terminalOutcome === "blocked") {

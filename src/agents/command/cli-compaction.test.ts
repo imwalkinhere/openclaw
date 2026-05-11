@@ -109,9 +109,12 @@ describe("runCliTurnCompactionLifecycle", () => {
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
 
     const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const ensureContextEnginesInitialized = vi.fn();
+    const resolveContextEngine = vi.fn(async () => buildContextEngine({ compactCalls }));
     const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
     setCliCompactionTestDeps({
-      resolveContextEngine: async () => buildContextEngine({ compactCalls }),
+      ensureContextEnginesInitialized,
+      resolveContextEngine,
       createPreparedEmbeddedPiSettingsManager: async () => ({
         getCompactionReserveTokens: () => 200,
         getCompactionKeepRecentTokens: () => 0,
@@ -145,6 +148,11 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     expect(compactCalls).toHaveLength(1);
+    expect(ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);
+    expect(resolveContextEngine).toHaveBeenCalledTimes(1);
+    expect(ensureContextEnginesInitialized.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveContextEngine.mock.invocationCallOrder[0],
+    );
     expect(compactCalls[0]).toMatchObject({
       sessionId,
       sessionKey,

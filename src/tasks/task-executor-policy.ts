@@ -99,7 +99,15 @@ export function shouldAutoDeliverTaskTerminalUpdate(task: TaskRecord): boolean {
   if (!isTerminalTaskStatus(task.status)) {
     return false;
   }
-  return task.deliveryStatus === "pending";
+  return task.deliveryStatus === "pending" || task.deliveryStatus === "session_queued";
+}
+
+export function shouldRetryQueuedTaskTerminalDelivery(task: TaskRecord): boolean {
+  return (
+    task.notifyPolicy !== "silent" &&
+    task.deliveryStatus === "session_queued" &&
+    isTerminalTaskStatus(task.status)
+  );
 }
 
 export function shouldAutoDeliverTaskStateChange(task: TaskRecord): boolean {

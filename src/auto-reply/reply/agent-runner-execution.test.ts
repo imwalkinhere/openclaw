@@ -961,6 +961,47 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("success");
   });
 
+  it("keeps background task heartbeat wakes on the resumed primary after empty visible CLI output", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "openai-codex";
+    followupRun.run.model = "gpt-5.4";
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = { payloads: [], meta: {} };
+      expect(
+        await params.classifyResult?.({
+          result,
+          provider: "openai-codex",
+          model: "gpt-5.4",
+          attempt: 1,
+          total: 2,
+        }),
+      ).toBeNull();
+      return {
+        result,
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "background-task-event",
+          MessageSid: "wake",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("success");
+    if (result.kind === "success") {
+      expect(result.fallbackProvider).toBe("openai-codex");
+      expect(result.fallbackAttempts).toEqual([]);
+    }
+  });
+
   it("rolls back persisted fallback selection when result classification rejects a candidate", async () => {
     const followupRun = createFollowupRun();
     followupRun.run.provider = "anthropic";

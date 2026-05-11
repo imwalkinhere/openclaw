@@ -48,6 +48,7 @@ import {
   resolveTaskForLookupToken,
   setTaskCleanupAfterById,
 } from "./runtime-internal.js";
+import { shouldRetryQueuedTaskTerminalDelivery } from "./task-executor-policy.js";
 import {
   configureTaskAuditTaskProvider,
   listTaskAuditFindings,
@@ -1037,6 +1038,9 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       continue;
     }
     await cleanupTerminalAcpSession(current);
+    if (shouldRetryQueuedTaskTerminalDelivery(current)) {
+      await taskRegistryMaintenanceRuntime.maybeDeliverTaskTerminalUpdate(current.taskId);
+    }
     if (
       shouldPruneTerminalTask(current, now) &&
       taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)
