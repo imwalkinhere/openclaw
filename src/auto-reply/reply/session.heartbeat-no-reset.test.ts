@@ -340,4 +340,26 @@ describe("initSessionState - heartbeat should not trigger session reset", () => 
     expect(result.isNewSession).toBe(false);
     expect(result.sessionId).toBe("exec-session-id-fghij");
   });
+
+  it("should handle background-task-event provider same as heartbeat (no reset)", async () => {
+    const now = Date.now();
+    const staleTime = now - 10 * 60 * 1000;
+
+    await saveExistingSession("background-task-session-id-klmno", staleTime);
+
+    const cfg = createBaseConfig();
+    const ctx = createBaseCtx({
+      Provider: "background-task-event",
+      Body: "A background worker finished. Continue the workflow.",
+    });
+
+    const result = await initSessionState({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe("background-task-session-id-klmno");
+  });
 });

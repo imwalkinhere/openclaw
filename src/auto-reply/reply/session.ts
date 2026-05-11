@@ -230,12 +230,16 @@ export async function initSessionState(params: {
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
-  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
-  // resets or conversation binding retargeting. These are automated system
-  // events, not user interactions that should affect session continuity.
+  // Heartbeat, background task, cron-event, and exec-event runs should NEVER
+  // trigger session resets or conversation binding retargeting. These are
+  // automated system events, not user interactions that should affect session
+  // continuity.
   // See #58409 for details on silent session reset bug.
   const isSystemEvent =
-    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+    ctx.Provider === "heartbeat" ||
+    ctx.Provider === "background-task-event" ||
+    ctx.Provider === "cron-event" ||
+    ctx.Provider === "exec-event";
   const conversationBindingContext = isSystemEvent
     ? null
     : resolveSessionConversationBindingContext(cfg, ctx);
