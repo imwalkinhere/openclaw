@@ -13,6 +13,7 @@ import {
   parseSessionsRouteArgs,
   parseStatusRouteArgs,
   parseTasksAuditRouteArgs,
+  parseTasksLedgerRouteArgs,
   parseTasksListRouteArgs,
 } from "./route-args.js";
 
@@ -141,6 +142,13 @@ export const routedCommandDefinitions = {
     runParsedArgs: async (args) => {
       const { tasksListJsonCommand } = await import("../../commands/tasks-json.js");
       await tasksListJsonCommand(args, defaultRuntime);
+    },
+  }),
+  "tasks-ledger": defineRoutedCommand({
+    parseArgs: parseTasksLedgerRouteArgs,
+    runParsedArgs: async (args) => {
+      const { tasksLedgerJsonCommand } = await import("../../commands/tasks-json.js");
+      await tasksLedgerJsonCommand(args, defaultRuntime);
     },
   }),
   "tasks-audit": defineRoutedCommand({

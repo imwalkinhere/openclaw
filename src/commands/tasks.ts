@@ -1,6 +1,7 @@
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { writeRuntimeJson } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
 import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
@@ -37,6 +38,7 @@ import {
 import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskNotifyPolicy, TaskRecord } from "../tasks/task-registry.types.js";
 import { isRich, theme } from "../terminal/theme.js";
+import { buildTasksLedgerJsonPayload, type TasksLedgerJsonArgs } from "./tasks-json.js";
 
 const RUNTIME_PAD = 8;
 const STATUS_PAD = 10;
@@ -365,6 +367,63 @@ export async function tasksShowCommand(
   ];
   for (const line of lines) {
     runtime.log(line);
+  }
+}
+
+export async function tasksLedgerCommand(opts: TasksLedgerJsonArgs, runtime: RuntimeEnv) {
+  const payload = buildTasksLedgerJsonPayload(opts);
+
+  if (opts.json) {
+    writeRuntimeJson(runtime, payload);
+    return;
+  }
+
+  runtime.log(info(`Task ledger: ${payload.count} runs from ${payload.source}`));
+  runtime.log(
+    info(
+      `Task pressure: ${payload.summary.byStatus.queued} queued · ${payload.summary.byStatus.running} running · ${payload.summary.failures} issues`,
+    ),
+  );
+  const activeFilters = Object.entries(payload.filters).filter(([, value]) => value !== null);
+  if (activeFilters.length > 0) {
+    runtime.log(info(activeFilters.map(([key, value]) => `${key}=${String(value)}`).join(" · ")));
+  }
+  if (payload.runs.length === 0) {
+    runtime.log("No task ledger runs found.");
+    return;
+  }
+  const rich = isRich();
+  const header = [
+    "Run".padEnd(RUN_PAD),
+    "Task".padEnd(ID_PAD),
+    "Kind".padEnd(RUNTIME_PAD),
+    "Status".padEnd(STATUS_PAD),
+    "Agent".padEnd(ID_PAD),
+    "Updated",
+    "Summary",
+  ].join(" ");
+  runtime.log(rich ? theme.heading(header) : header);
+  for (const run of payload.runs) {
+    const summary = truncate(
+      normalizeOptionalString(run.terminalSummary) ||
+        normalizeOptionalString(run.progressSummary) ||
+        normalizeOptionalString(run.label) ||
+        run.title,
+      80,
+    );
+    runtime.log(
+      [
+        shortToken(run.canonicalRunKey, RUN_PAD).padEnd(RUN_PAD),
+        shortToken(run.id).padEnd(ID_PAD),
+        run.runtime.padEnd(RUNTIME_PAD),
+        formatTaskStatusCell(run.status, rich),
+        shortToken(run.workerAgentId ?? run.agentId).padEnd(ID_PAD),
+        formatAgeMs(Date.now() - run.updatedAt).padEnd(8),
+        summary,
+      ]
+        .join(" ")
+        .trimEnd(),
+    );
   }
 }
 

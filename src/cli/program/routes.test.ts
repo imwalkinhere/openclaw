@@ -8,6 +8,7 @@ const modelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const runDaemonStatusMock = vi.hoisted(() => vi.fn(async () => {}));
 const statusJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksListJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const tasksLedgerJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const tasksAuditJsonCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsListCommandMock = vi.hoisted(() => vi.fn(async () => {}));
 const channelsStatusCommandMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -35,6 +36,7 @@ vi.mock("../../commands/status-json.js", () => ({
 
 vi.mock("../../commands/tasks-json.js", () => ({
   tasksListJsonCommand: tasksListJsonCommandMock,
+  tasksLedgerJsonCommand: tasksLedgerJsonCommandMock,
   tasksAuditJsonCommand: tasksAuditJsonCommandMock,
 }));
 
@@ -301,7 +303,10 @@ describe("program routes", () => {
         "--json",
       ]),
     ).resolves.toBe(true);
-    expect(runConfigGetMock).toHaveBeenCalledWith({ path: "update.channel", json: true });
+    expect(runConfigGetMock).toHaveBeenCalledWith({
+      path: "update.channel",
+      json: true,
+    });
   });
 
   it("passes config unset path correctly when root option values precede command", async () => {
@@ -326,7 +331,10 @@ describe("program routes", () => {
         "--json",
       ]),
     ).resolves.toBe(true);
-    expect(runConfigGetMock).toHaveBeenCalledWith({ path: "update.channel", json: true });
+    expect(runConfigGetMock).toHaveBeenCalledWith({
+      path: "update.channel",
+      json: true,
+    });
   });
 
   it("passes config unset path when root value options appear after subcommand", async () => {
@@ -510,9 +518,49 @@ describe("program routes", () => {
     );
   });
 
+  it("routes tasks ledger JSON through the lean task JSON command", async () => {
+    const route = expectRoute(["tasks", "ledger"]);
+    expect(route?.loadPlugins).toBeUndefined();
+    expect(route?.canRun?.(["node", "openclaw", "tasks", "ledger"])).toBe(false);
+    await expect(
+      route?.run([
+        "node",
+        "openclaw",
+        "tasks",
+        "ledger",
+        "--json",
+        "--runtime",
+        "acp",
+        "--status=running",
+        "--agent",
+        "claude",
+        "--owner",
+        "agent:foreman:discord:channel:123",
+        "--label",
+        "stockbot",
+      ]),
+    ).resolves.toBe(true);
+    expect(tasksLedgerJsonCommandMock).toHaveBeenCalledWith(
+      {
+        json: true,
+        runtime: "acp",
+        status: "running",
+        agent: "claude",
+        owner: "agent:foreman:discord:channel:123",
+        label: "stockbot",
+      },
+      expect.any(Object),
+    );
+  });
+
   it("returns false for task JSON routes when option values are missing or unknown", async () => {
     await expectRunFalse(["tasks"], ["node", "openclaw", "tasks", "--json", "--runtime"]);
     await expectRunFalse(["tasks", "list"], ["node", "openclaw", "tasks", "list"]);
+    await expectRunFalse(["tasks", "ledger"], ["node", "openclaw", "tasks", "ledger"]);
+    await expectRunFalse(
+      ["tasks", "ledger"],
+      ["node", "openclaw", "tasks", "ledger", "--json", "--agent"],
+    );
     await expectRunFalse(
       ["tasks", "audit"],
       ["node", "openclaw", "tasks", "audit", "--json", "--limit"],

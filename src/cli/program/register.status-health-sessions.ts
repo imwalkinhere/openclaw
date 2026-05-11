@@ -9,6 +9,7 @@ import { statusCommand } from "../../commands/status.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
+  tasksLedgerCommand,
   tasksListCommand,
   tasksMaintenanceCommand,
   tasksNotifyCommand,
@@ -381,6 +382,41 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             json: Boolean(opts.json || parentOpts?.json),
             runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
             status: (opts.status as string | undefined) ?? parentOpts?.status,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  tasksCmd
+    .command("ledger")
+    .description("List canonical background-task runs for operator dashboards")
+    .option("--json", "Output as JSON", false)
+    .option("--runtime <name>", "Filter by kind (subagent, acp, cron, cli)")
+    .option(
+      "--status <name>",
+      "Filter by status (queued, running, succeeded, failed, timed_out, cancelled, lost)",
+    )
+    .option("--agent <id>", "Filter by worker agent id")
+    .option("--owner <key>", "Filter by owning session key")
+    .option("--label <text>", "Filter by label or task text")
+    .action(async (opts, command) => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            json?: boolean;
+            runtime?: string;
+            status?: string;
+          }
+        | undefined;
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        await tasksLedgerCommand(
+          {
+            json: Boolean(opts.json || parentOpts?.json),
+            runtime: (opts.runtime as string | undefined) ?? parentOpts?.runtime,
+            status: (opts.status as string | undefined) ?? parentOpts?.status,
+            agent: opts.agent as string | undefined,
+            owner: opts.owner as string | undefined,
+            label: opts.label as string | undefined,
           },
           defaultRuntime,
         );

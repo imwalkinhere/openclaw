@@ -301,6 +301,48 @@ export function parseTasksListRouteArgs(argv: string[]) {
   );
 }
 
+export function parseTasksLedgerRouteArgs(argv: string[]) {
+  if (!hasFlag(argv, "--json")) {
+    return null;
+  }
+  const positionals = getCommandPositionalsWithRootOptions(argv, {
+    commandPath: ["tasks", "ledger"],
+    booleanFlags: ["--json"],
+    valueFlags: ["--runtime", "--status", "--agent", "--owner", "--label"],
+  });
+  if (!positionals || positionals.length !== 0) {
+    return null;
+  }
+  const runtime = parseOptionalFlagValue(argv, "--runtime");
+  if (!runtime.ok) {
+    return null;
+  }
+  const status = parseOptionalFlagValue(argv, "--status");
+  if (!status.ok) {
+    return null;
+  }
+  const agent = parseOptionalFlagValue(argv, "--agent");
+  if (!agent.ok) {
+    return null;
+  }
+  const owner = parseOptionalFlagValue(argv, "--owner");
+  if (!owner.ok) {
+    return null;
+  }
+  const label = parseOptionalFlagValue(argv, "--label");
+  if (!label.ok) {
+    return null;
+  }
+  return {
+    json: true as const,
+    runtime: runtime.value,
+    status: status.value,
+    agent: agent.value,
+    owner: owner.value,
+    label: label.value,
+  };
+}
+
 export function parseTasksAuditRouteArgs(argv: string[]) {
   if (!hasFlag(argv, "--json")) {
     return null;

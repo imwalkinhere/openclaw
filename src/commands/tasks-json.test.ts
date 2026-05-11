@@ -6,11 +6,16 @@ import {
 } from "../tasks/task-flow-registry.js";
 import {
   createTaskRecord,
+  linkTaskToFlowById,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
+import {
+  tasksAuditJsonCommand,
+  tasksLedgerJsonCommand,
+  tasksListJsonCommand,
+} from "./tasks-json.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -88,8 +93,115 @@ describe("tasks JSON commands", () => {
         status: "running",
       });
       expect(payload.tasks).toEqual([
-        expect.objectContaining({ runtime: "cli", status: "running", runId: "run-cli" }),
+        expect.objectContaining({
+          runtime: "cli",
+          status: "running",
+          runId: "run-cli",
+        }),
       ]);
+    });
+  });
+
+  it("emits a backend-neutral canonical run ledger for shopfloor consumers", async () => {
+    await withTaskJsonStateDir(async () => {
+      const ownerKey = "agent:foreman:discord:channel:123";
+      const flow = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "foreman-endgame",
+        goal: "Build stockbot smoke app",
+        status: "running",
+      });
+      const run = createTaskRecord({
+        runtime: "acp",
+        ownerKey,
+        requesterSessionKey: ownerKey,
+        scopeKind: "session",
+        childSessionKey: "agent:claude:acp:child",
+        agentId: "foreman",
+        runId: "run-acp-1",
+        label: "stockbot-smoke",
+        status: "running",
+        task: "Build the stockbot smoke app",
+        progressSummary: "Editing files",
+      });
+      linkTaskToFlowById({
+        taskId: run.taskId,
+        flowId: flow.flowId,
+      });
+      createTaskRecord({
+        runtime: "cli",
+        ownerKey,
+        requesterSessionKey: ownerKey,
+        scopeKind: "session",
+        agentId: "codex",
+        runId: "run-cli-1",
+        label: "other",
+        status: "succeeded",
+        task: "Unrelated task",
+      });
+
+      const runtime = createRuntime();
+      await tasksLedgerJsonCommand(
+        {
+          json: true,
+          runtime: "acp",
+          status: "running",
+          agent: "claude",
+          owner: ownerKey,
+          label: "stockbot",
+        },
+        runtime,
+      );
+
+      const payload = readJsonLog(runtime) as {
+        schemaVersion: number;
+        source: string;
+        count: number;
+        filters: Record<string, string | null>;
+        summary: { active: number; byRuntime: Record<string, number> };
+        runs: Array<{
+          canonicalRunKey: string;
+          updatedAt: number;
+          workerAgentId: string;
+          runtime: string;
+          agentId: string;
+          runId: string;
+          childSessionKey: string;
+          progressSummary: string;
+          active_path?: string;
+        }>;
+        flowCount: number;
+        flows: Array<{ id: string; goal: string }>;
+      };
+      expect(payload).toMatchObject({
+        schemaVersion: 1,
+        source: "task-registry",
+        count: 1,
+        filters: {
+          runtime: "acp",
+          status: "running",
+          agent: "claude",
+          owner: ownerKey,
+          label: "stockbot",
+        },
+      });
+      expect(payload.summary.active).toBe(1);
+      expect(payload.summary.byRuntime.acp).toBe(1);
+      expect(payload.runs).toEqual([
+        expect.objectContaining({
+          canonicalRunKey: "run-acp-1",
+          workerAgentId: "claude",
+          runtime: "acp",
+          agentId: "foreman",
+          runId: "run-acp-1",
+          childSessionKey: "agent:claude:acp:child",
+          progressSummary: "Editing files",
+        }),
+      ]);
+      expect(payload.runs[0]?.updatedAt).toEqual(expect.any(Number));
+      expect(payload.runs[0]).not.toHaveProperty("active_path");
+      expect(payload.flowCount).toBe(1);
+      expect(payload.flows).toEqual([expect.objectContaining({ id: flow.flowId })]);
     });
   });
 
@@ -147,7 +259,11 @@ describe("tasks JSON commands", () => {
       expect(payload.summary.taskFlows.byCode.stale_running).toBe(1);
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(2);
-      expect(payload.summary.combined).toEqual({ total: 5, errors: 3, warnings: 2 });
+      expect(payload.summary.combined).toEqual({
+        total: 5,
+        errors: 3,
+        warnings: 2,
+      });
       expect(payload.findings).toEqual([
         expect.objectContaining({
           kind: "task_flow",

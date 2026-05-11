@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   commitmentsDismissCommand: vi.fn(),
   tasksListCommand: vi.fn(),
   tasksAuditCommand: vi.fn(),
+  tasksLedgerCommand: vi.fn(),
   tasksMaintenanceCommand: vi.fn(),
   tasksShowCommand: vi.fn(),
   tasksNotifyCommand: vi.fn(),
@@ -36,6 +37,7 @@ const commitmentsListCommand = mocks.commitmentsListCommand;
 const commitmentsDismissCommand = mocks.commitmentsDismissCommand;
 const tasksListCommand = mocks.tasksListCommand;
 const tasksAuditCommand = mocks.tasksAuditCommand;
+const tasksLedgerCommand = mocks.tasksLedgerCommand;
 const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
 const tasksShowCommand = mocks.tasksShowCommand;
 const tasksNotifyCommand = mocks.tasksNotifyCommand;
@@ -74,6 +76,7 @@ vi.mock("../../commands/commitments.js", () => ({
 vi.mock("../../commands/tasks.js", () => ({
   tasksListCommand: mocks.tasksListCommand,
   tasksAuditCommand: mocks.tasksAuditCommand,
+  tasksLedgerCommand: mocks.tasksLedgerCommand,
   tasksMaintenanceCommand: mocks.tasksMaintenanceCommand,
   tasksShowCommand: mocks.tasksShowCommand,
   tasksNotifyCommand: mocks.tasksNotifyCommand,
@@ -113,6 +116,7 @@ describe("registerStatusHealthSessionsCommands", () => {
     commitmentsDismissCommand.mockResolvedValue(undefined);
     tasksListCommand.mockResolvedValue(undefined);
     tasksAuditCommand.mockResolvedValue(undefined);
+    tasksLedgerCommand.mockResolvedValue(undefined);
     tasksMaintenanceCommand.mockResolvedValue(undefined);
     tasksShowCommand.mockResolvedValue(undefined);
     tasksNotifyCommand.mockResolvedValue(undefined);
@@ -335,6 +339,36 @@ describe("registerStatusHealthSessionsCommands", () => {
       expect.objectContaining({
         lookup: "run-123",
         json: true,
+      }),
+      runtime,
+    );
+  });
+
+  it("runs tasks ledger subcommand with shopfloor filters", async () => {
+    await runCli([
+      "tasks",
+      "ledger",
+      "--json",
+      "--runtime",
+      "acp",
+      "--status",
+      "running",
+      "--agent",
+      "claude",
+      "--owner",
+      "agent:foreman:discord:channel:123",
+      "--label",
+      "stockbot",
+    ]);
+
+    expect(tasksLedgerCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        json: true,
+        runtime: "acp",
+        status: "running",
+        agent: "claude",
+        owner: "agent:foreman:discord:channel:123",
+        label: "stockbot",
       }),
       runtime,
     );

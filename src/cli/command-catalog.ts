@@ -25,6 +25,7 @@ type CliRoutedCommandId =
   | "models-list"
   | "models-status"
   | "tasks-list"
+  | "tasks-ledger"
   | "tasks-audit"
   | "channels-list"
   | "channels-status";
@@ -219,6 +220,17 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
       networkProxy: "bypass",
     },
     route: { id: "tasks-list" },
+  },
+  {
+    commandPath: ["tasks", "ledger"],
+    exact: true,
+    policy: {
+      ensureCliPath: false,
+      routeConfigGuard: "when-suppressed",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    },
+    route: { id: "tasks-ledger" },
   },
   {
     commandPath: ["tasks", "audit"],

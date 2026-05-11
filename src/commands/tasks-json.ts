@@ -1,6 +1,12 @@
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
+import {
+  mapTaskFlowView,
+  mapTaskRunAggregateSummary,
+  mapTaskRunView,
+} from "../tasks/task-domain-views.js";
 import {
   listTaskFlowAuditFindings,
   summarizeTaskFlowAuditFindings,
@@ -16,6 +22,7 @@ import {
   type TaskAuditSeverity,
 } from "../tasks/task-registry.audit.js";
 import { compareTaskAuditFindingSortKeys } from "../tasks/task-registry.audit.shared.js";
+import { summarizeTaskRecords } from "../tasks/task-registry.summary.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 
 type TaskSystemAuditCode = TaskAuditCode | TaskFlowAuditCode;
@@ -50,6 +57,23 @@ export type TasksAuditJsonArgs = {
   severity?: string;
   code?: string;
   limit?: number;
+};
+
+export type TasksLedgerJsonArgs = {
+  json?: boolean;
+  runtime?: string;
+  status?: string;
+  agent?: string;
+  owner?: string;
+  label?: string;
+};
+
+type TaskLedgerFilters = {
+  runtime: string | undefined;
+  status: string | undefined;
+  agent: string | undefined;
+  owner: string | undefined;
+  label: string | undefined;
 };
 
 function compareSystemAuditFindings(left: TaskSystemAuditFinding, right: TaskSystemAuditFinding) {
@@ -142,6 +166,92 @@ function buildTasksListJsonPayload(opts: TasksListJsonArgs) {
   };
 }
 
+function normalizeFilter(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized || undefined;
+}
+
+function taskUpdatedAt(task: TaskRecord): number {
+  return task.lastEventAt ?? task.endedAt ?? task.startedAt ?? task.createdAt;
+}
+
+function taskCanonicalRunKey(task: TaskRecord): string {
+  return task.runId ?? task.sourceId ?? task.taskId;
+}
+
+function taskWorkerAgentId(task: TaskRecord): string | undefined {
+  return parseAgentSessionKey(task.childSessionKey)?.agentId ?? task.agentId;
+}
+
+function taskMatchesLedgerFilters(task: TaskRecord, filters: TaskLedgerFilters): boolean {
+  if (filters.runtime && task.runtime !== filters.runtime) {
+    return false;
+  }
+  if (filters.status && task.status !== filters.status) {
+    return false;
+  }
+  if (filters.agent && taskWorkerAgentId(task) !== filters.agent) {
+    return false;
+  }
+  if (filters.owner && task.ownerKey !== filters.owner) {
+    return false;
+  }
+  if (filters.label) {
+    const haystacks = [task.label, task.task].filter((item): item is string => Boolean(item));
+    const labelFilter = filters.label.toLowerCase();
+    if (!haystacks.some((item) => item.toLowerCase().includes(labelFilter))) {
+      return false;
+    }
+  }
+  return true;
+}
+
+export function buildTasksLedgerJsonPayload(opts: TasksLedgerJsonArgs) {
+  const filters: TaskLedgerFilters = {
+    runtime: normalizeFilter(opts.runtime),
+    status: normalizeFilter(opts.status),
+    agent: normalizeFilter(opts.agent),
+    owner: normalizeFilter(opts.owner),
+    label: normalizeFilter(opts.label),
+  };
+  const tasks = listTaskJsonRecords().filter((task) => taskMatchesLedgerFilters(task, filters));
+  const linkedFlowIds = new Set(
+    tasks.map((task) => task.parentFlowId).filter((flowId): flowId is string => Boolean(flowId)),
+  );
+  const flows =
+    linkedFlowIds.size > 0
+      ? listTaskFlowRecords().filter((flow) => {
+          if (filters.owner && flow.ownerKey !== filters.owner) {
+            return false;
+          }
+          return linkedFlowIds.has(flow.flowId);
+        })
+      : [];
+
+  return {
+    schemaVersion: 1,
+    source: "task-registry",
+    generatedAt: Date.now(),
+    filters: {
+      runtime: filters.runtime ?? null,
+      status: filters.status ?? null,
+      agent: filters.agent ?? null,
+      owner: filters.owner ?? null,
+      label: filters.label ?? null,
+    },
+    count: tasks.length,
+    summary: mapTaskRunAggregateSummary(summarizeTaskRecords(tasks)),
+    runs: tasks.map((task) => ({
+      canonicalRunKey: taskCanonicalRunKey(task),
+      updatedAt: taskUpdatedAt(task),
+      workerAgentId: taskWorkerAgentId(task) ?? null,
+      ...mapTaskRunView(task),
+    })),
+    flowCount: flows.length,
+    flows: flows.map((flow) => mapTaskFlowView(flow)),
+  };
+}
+
 function buildTasksAuditJsonPayload(opts: TasksAuditJsonArgs) {
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
@@ -186,4 +296,11 @@ export async function tasksAuditJsonCommand(
   runtime: RuntimeEnv,
 ): Promise<void> {
   writeRuntimeJson(runtime, buildTasksAuditJsonPayload(opts));
+}
+
+export async function tasksLedgerJsonCommand(
+  opts: TasksLedgerJsonArgs,
+  runtime: RuntimeEnv,
+): Promise<void> {
+  writeRuntimeJson(runtime, buildTasksLedgerJsonPayload(opts));
 }
