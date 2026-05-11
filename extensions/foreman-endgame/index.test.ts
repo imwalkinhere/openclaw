@@ -287,4 +287,66 @@ describe("foreman-endgame guard helpers", () => {
     expect(state.sessions[SESSION_KEY].dispatches).toEqual([]);
     expect(state.sessions[SESSION_KEY].announcedDispatches).toBe(0);
   });
+
+  it("moves an active build to a terminal failed state when an accepted worker errors", async () => {
+    const { run, readState } = await makeHarness();
+
+    await run("agent_turn_prepare", {
+      prompt: "build",
+      messages: [],
+      queuedInjections: [],
+    });
+    await run("agent_turn_prepare", {
+      prompt: "go",
+      messages: [],
+      queuedInjections: [],
+    });
+    await run("before_tool_call", {
+      toolName: "sessions_spawn",
+      params: {
+        task: "Scaffold app",
+        label: "scaffold",
+        agentId: "codex",
+        model: "gpt-5.4-mini",
+      },
+    });
+    await run("after_tool_call", {
+      toolName: "sessions_spawn",
+      params: {
+        task: "Scaffold app",
+        label: "scaffold",
+        agentId: "codex",
+        model: "gpt-5.4-mini",
+      },
+      result: {
+        status: "accepted",
+        runId: "run-worker-1",
+        childSessionKey: "agent:codex:acp:worker-1",
+      },
+    });
+
+    let state = await readState();
+    expect(state.sessions[SESSION_KEY].phase).toBe("building");
+
+    await run(
+      "subagent_ended",
+      {
+        targetSessionKey: "agent:codex:acp:worker-1",
+        targetKind: "acp",
+        reason: "worker failed",
+        runId: "run-worker-1",
+        outcome: "error",
+        error: "Internal error",
+      },
+      {
+        requesterSessionKey: SESSION_KEY,
+        childSessionKey: "agent:codex:acp:worker-1",
+        runId: "run-worker-1",
+      },
+    );
+
+    state = await readState();
+    expect(state.sessions[SESSION_KEY].phase).toBe("check-failed");
+    expect(state.sessions[SESSION_KEY].lastError).toBe("Internal error");
+  });
 });

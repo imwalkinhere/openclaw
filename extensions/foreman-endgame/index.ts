@@ -490,6 +490,49 @@ function classifyAssistantText(text: string): BuildPhase | undefined {
   return undefined;
 }
 
+function isFailedSubagentOutcome(outcome: unknown): boolean {
+  return (
+    outcome === "error" || outcome === "timeout" || outcome === "killed" || outcome === "reset"
+  );
+}
+
+function findDispatchForEndedSubagent(
+  session: BuildSessionState,
+  params: { runId?: string; childSessionKey?: string },
+): DispatchRecord | undefined {
+  const runId = stringValue(params.runId);
+  const childSessionKey = stringValue(params.childSessionKey);
+  if (!runId && !childSessionKey) {
+    return undefined;
+  }
+  return session.dispatches
+    .slice()
+    .reverse()
+    .find(
+      (dispatch) =>
+        (runId && dispatch.runId === runId) ||
+        (childSessionKey && dispatch.childSessionKey === childSessionKey),
+    );
+}
+
+function applyFailedDispatchTransition(
+  session: BuildSessionState,
+  dispatch: DispatchRecord,
+  error: string,
+  now: string,
+): void {
+  session.lastError = error;
+  if (!isActivePhase(session.phase)) {
+    session.updatedAt = now;
+    return;
+  }
+  if (dispatch.kind === "promote") {
+    setPhase(session, "awaiting-promote", now);
+    return;
+  }
+  setPhase(session, "check-failed", now);
+}
+
 function messageRole(message: unknown): string | undefined {
   if (message !== null && typeof message === "object") {
     const role = (message as Record<string, unknown>).role;
@@ -736,6 +779,30 @@ export default definePluginEntry({
       });
     });
 
+    api.on("subagent_ended", async (event, ctx) => {
+      const requesterSessionKey = ctx.requesterSessionKey;
+      if (
+        !requesterSessionKey ||
+        !isTargetForeman({ sessionKey: requesterSessionKey }, agentId, discordChannelId) ||
+        !isFailedSubagentOutcome(event.outcome)
+      ) {
+        return;
+      }
+      await updateState((state) => {
+        const session = sessionStateFor(state, requesterSessionKey);
+        const dispatch = findDispatchForEndedSubagent(session, {
+          runId: event.runId ?? ctx.runId,
+          childSessionKey: event.targetSessionKey ?? ctx.childSessionKey,
+        });
+        if (!dispatch) {
+          return;
+        }
+        const label = dispatch.label ? ` ${dispatch.label}` : "";
+        const error = event.error || event.reason || `worker${label} ended with ${event.outcome}`;
+        applyFailedDispatchTransition(session, dispatch, error, new Date().toISOString());
+      });
+    });
+
     api.on("before_message_write", (event, ctx) => {
       if (!isTargetForeman(ctx, agentId, discordChannelId) || !ctx.sessionKey) {
         return undefined;
@@ -791,6 +858,7 @@ export const __testing = {
   commandCandidates,
   commandMatches,
   coordinatorToolBlockReason,
+  isFailedSubagentOutcome,
   isDispatchAnnouncementText,
   isAbortTrigger,
   isBuildTrigger,
