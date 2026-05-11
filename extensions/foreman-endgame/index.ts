@@ -6,6 +6,7 @@ type ForemanEndgameConfig = {
   agentId?: string;
   statePath?: string;
   discordChannelId?: string;
+  memoryWriteRoot?: string;
 };
 
 type BuildPhase =
@@ -39,6 +40,7 @@ type BuildSessionState = {
   goApprovedAt?: string;
   promoteApprovedAt?: string;
   dispatches: DispatchRecord[];
+  announcedDispatches?: number;
   lastError?: string;
 };
 
@@ -50,6 +52,7 @@ type StateFile = {
 type SpawnKind = "worker" | "check" | "promote";
 
 const DEFAULT_STATE_PATH = "/home/aiserver/.openclaw/foreman-endgame/state.json";
+const DEFAULT_MEMORY_WRITE_ROOT = "/home/aiserver/.openclaw/workspace-foreman/memory";
 const WRITE_TOOLS = new Set([
   "Bash",
   "Edit",
@@ -59,27 +62,83 @@ const WRITE_TOOLS = new Set([
   "bash",
   "edit",
   "exec",
+  "exec_command",
   "process",
+  "shell",
   "multi_edit",
   "multiedit",
   "write",
+  "file_write",
   "mcp__openclaw__file_write",
 ]);
+const MESSAGE_MUTATION_ACTIONS = new Set(["delete", "edit", "unsend"]);
+
+function baseToolName(toolName: string): string {
+  return toolName.split("__").pop()?.toLowerCase() ?? toolName.toLowerCase();
+}
 
 function isCoordinatorWriteTool(toolName: string): boolean {
-  if (WRITE_TOOLS.has(toolName)) {
+  const normalized = toolName.toLowerCase();
+  const base = baseToolName(toolName);
+  if (WRITE_TOOLS.has(toolName) || WRITE_TOOLS.has(normalized) || WRITE_TOOLS.has(base)) {
     return true;
   }
-  const normalized = toolName.toLowerCase();
   return (
     normalized.endsWith("__file_write") ||
     normalized.endsWith("__write_file") ||
     normalized.endsWith("__edit_file") ||
     normalized.endsWith("__apply_patch") ||
     normalized.endsWith("__exec") ||
+    normalized.endsWith("__exec_command") ||
     normalized.endsWith("__shell") ||
     normalized.endsWith("__bash")
   );
+}
+
+function resolveToolPath(params: Record<string, unknown>): string | undefined {
+  return stringValue(params.path) ?? stringValue(params.file_path) ?? stringValue(params.filePath);
+}
+
+function isPathInside(candidate: string | undefined, root: string): boolean {
+  if (!candidate) {
+    return false;
+  }
+  const resolvedCandidate = path.resolve(candidate);
+  const resolvedRoot = path.resolve(root);
+  return (
+    resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`)
+  );
+}
+
+function isMemoryWriteToolAllowed(
+  toolName: string,
+  params: Record<string, unknown>,
+  memoryWriteRoot: string,
+): boolean {
+  return (
+    baseToolName(toolName) === "file_write" &&
+    isPathInside(resolveToolPath(params), memoryWriteRoot)
+  );
+}
+
+function coordinatorToolBlockReason(
+  toolName: string,
+  params: Record<string, unknown>,
+  memoryWriteRoot: string,
+): string | undefined {
+  if (baseToolName(toolName) === "message") {
+    const action = stringValue(params.action)?.toLowerCase();
+    if (action && MESSAGE_MUTATION_ACTIONS.has(action)) {
+      return "Foreman cannot delete or edit channel messages; the Discord build audit trail must stay append-only.";
+    }
+  }
+  if (!isCoordinatorWriteTool(toolName)) {
+    return undefined;
+  }
+  if (isMemoryWriteToolAllowed(toolName, params, memoryWriteRoot)) {
+    return undefined;
+  }
+  return "Foreman is coordinator-only. Dispatch coding or shell work to ACP workers instead of using local write/exec tools.";
 }
 
 function isConfig(value: unknown): value is ForemanEndgameConfig {
@@ -112,6 +171,22 @@ function normalizeCommand(text: string): string {
     .replace(/[^\p{L}\p{N}\s'-]/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
+}
+
+function commandCandidates(text: string): string[] {
+  const candidates = [normalizeCommand(text)];
+  const firstLine = text
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (firstLine) {
+    candidates.push(normalizeCommand(firstLine));
+  }
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function commandMatches(text: string, predicate: (command: string) => boolean): boolean {
+  return commandCandidates(text).some(predicate);
 }
 
 function includesDiscordChannel(sessionKey: string | undefined, discordChannelId: string): boolean {
@@ -246,17 +321,78 @@ function classifySpawn(params: Record<string, unknown>): SpawnKind {
   return "worker";
 }
 
+function isHumanInitiatedBuildTrigger(trigger: string | undefined): boolean {
+  return !trigger || trigger === "user" || trigger === "manual";
+}
+
+function applyHumanCommandTransition(
+  session: BuildSessionState,
+  text: string,
+  now: string,
+): string | undefined {
+  if (commandMatches(text, isAbortTrigger)) {
+    setPhase(session, "aborted", now);
+    return undefined;
+  }
+
+  if (commandMatches(text, isGoTrigger) || commandMatches(text, isBuildTrigger)) {
+    if (commandMatches(text, isGoTrigger) && session.phase === "proposed") {
+      setPhase(session, "approved", now);
+      session.goApprovedAt = now;
+      return undefined;
+    }
+    if (!commandMatches(text, isBuildTrigger)) {
+      return `There is no proposed build plan waiting for go (state: ${session.phase}). Say "build" first so Foreman can summarize the brief and task plan.`;
+    }
+    if (isActivePhase(session.phase)) {
+      return `A build is already in progress for this channel (state: ${session.phase}). Finish it, abort it, or promote it before starting another one.`;
+    }
+    setPhase(session, "proposed", now);
+    session.buildRequestedAt = now;
+    session.dispatches = [];
+    session.announcedDispatches = 0;
+    session.lastError = undefined;
+    return undefined;
+  }
+
+  if (commandMatches(text, isPromoteTrigger)) {
+    if (session.phase !== "awaiting-promote") {
+      return `Nothing is ready to promote yet (state: ${session.phase}). Foreman must run and pass koolaid-app-check before promotion can be approved.`;
+    }
+    setPhase(session, "promote-approved", now);
+    session.promoteApprovedAt = now;
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function isDispatchAnnouncementText(text: string): boolean {
+  return /^\s*(?:🚀\s*)?dispatched\b/iu.test(text);
+}
+
+function messageToolText(params: Record<string, unknown>): string {
+  return getText(params.message ?? params.text ?? params.content ?? "");
+}
+
+function isOutboundMessageSend(toolName: string, params: Record<string, unknown>): boolean {
+  return (
+    baseToolName(toolName) === "message" && stringValue(params.action)?.toLowerCase() === "send"
+  );
+}
+
 function isAcceptedSpawn(result: unknown): boolean {
+  const acceptedPattern = /"status"\s*:\s*"accepted"/u;
   if (result !== null && typeof result === "object") {
     const record = result as Record<string, unknown>;
     if (record.status === "accepted") {
       return true;
     }
     if (Array.isArray(record.content)) {
-      return record.content.some((entry) => getText(entry).includes('"status":"accepted"'));
+      return record.content.some((entry) => acceptedPattern.test(getText(entry)));
     }
   }
-  return getText(result).includes('"status":"accepted"');
+  return acceptedPattern.test(getText(result));
 }
 
 function extractRecord(value: unknown): Record<string, unknown> {
@@ -329,6 +465,7 @@ export default definePluginEntry({
     const cfg = isConfig(api.pluginConfig) ? api.pluginConfig : {};
     const agentId = stringValue(cfg.agentId) ?? "foreman";
     const statePath = stringValue(cfg.statePath) ?? DEFAULT_STATE_PATH;
+    const memoryWriteRoot = stringValue(cfg.memoryWriteRoot) ?? DEFAULT_MEMORY_WRITE_ROOT;
     const discordChannelId = stringValue(cfg.discordChannelId);
 
     let stateChain: Promise<unknown> = Promise.resolve();
@@ -343,8 +480,29 @@ export default definePluginEntry({
       return await run;
     };
 
+    api.on("agent_turn_prepare", async (event, ctx) => {
+      if (
+        !isHumanInitiatedBuildTrigger(ctx.trigger) ||
+        !isTargetForeman(ctx, agentId, discordChannelId)
+      ) {
+        return undefined;
+      }
+      const sessionKey = ctx.sessionKey;
+      if (!sessionKey) {
+        return undefined;
+      }
+      await updateState((state) => {
+        const session = sessionStateFor(state, sessionKey);
+        applyHumanCommandTransition(session, event.prompt, new Date().toISOString());
+      });
+      return undefined;
+    });
+
     api.on("before_agent_reply", async (event, ctx) => {
-      if (ctx.trigger !== "user" || !isTargetForeman(ctx, agentId, discordChannelId)) {
+      if (
+        !isHumanInitiatedBuildTrigger(ctx.trigger) ||
+        !isTargetForeman(ctx, agentId, discordChannelId)
+      ) {
         return undefined;
       }
 
@@ -353,59 +511,29 @@ export default definePluginEntry({
         return undefined;
       }
 
-      const command = normalizeCommand(event.cleanedBody);
-      if (!command) {
+      if (commandCandidates(event.cleanedBody).length === 0) {
         return undefined;
       }
 
-      if (isAbortTrigger(command)) {
-        await updateState((state) => {
-          const session = sessionStateFor(state, sessionKey);
-          setPhase(session, "aborted", new Date().toISOString());
-        });
-        return undefined;
-      }
-
-      if (isGoTrigger(command) || isBuildTrigger(command)) {
-        const reply = await updateState((state) => {
-          const session = sessionStateFor(state, sessionKey);
-          if (isGoTrigger(command) && session.phase === "proposed") {
-            const now = new Date().toISOString();
-            setPhase(session, "approved", now);
-            session.goApprovedAt = now;
-            return undefined;
-          }
-          if (!isBuildTrigger(command)) {
-            return `There is no proposed build plan waiting for go (state: ${session.phase}). Say "build" first so Foreman can summarize the brief and task plan.`;
-          }
-          if (isActivePhase(session.phase)) {
-            return `A build is already in progress for this channel (state: ${session.phase}). Finish it, abort it, or promote it before starting another one.`;
-          }
-          const now = new Date().toISOString();
-          setPhase(session, "proposed", now);
-          session.buildRequestedAt = now;
-          session.dispatches = [];
-          session.lastError = undefined;
-          return undefined;
-        });
+      if (
+        commandMatches(event.cleanedBody, isAbortTrigger) ||
+        commandMatches(event.cleanedBody, isBuildTrigger) ||
+        commandMatches(event.cleanedBody, isGoTrigger) ||
+        commandMatches(event.cleanedBody, isPromoteTrigger)
+      ) {
+        const reply = await updateState((state) =>
+          applyHumanCommandTransition(
+            sessionStateFor(state, sessionKey),
+            event.cleanedBody,
+            new Date().toISOString(),
+          ),
+        );
         return reply
-          ? { handled: true, reply: { text: reply }, reason: "foreman-build-active" }
-          : undefined;
-      }
-
-      if (isPromoteTrigger(command)) {
-        const reply = await updateState((state) => {
-          const session = sessionStateFor(state, sessionKey);
-          if (session.phase !== "awaiting-promote") {
-            return `Nothing is ready to promote yet (state: ${session.phase}). Foreman must run and pass koolaid-app-check before promotion can be approved.`;
-          }
-          const now = new Date().toISOString();
-          setPhase(session, "promote-approved", now);
-          session.promoteApprovedAt = now;
-          return undefined;
-        });
-        return reply
-          ? { handled: true, reply: { text: reply }, reason: "foreman-promote-without-check" }
+          ? {
+              handled: true,
+              reply: { text: reply },
+              reason: "foreman-build-state-gate",
+            }
           : undefined;
       }
 
@@ -418,19 +546,47 @@ export default definePluginEntry({
       }
 
       const toolName = event.toolName;
-      if (isCoordinatorWriteTool(toolName)) {
+      const sessionKey = ctx.sessionKey;
+      const coordinatorBlockReason = coordinatorToolBlockReason(
+        toolName,
+        event.params,
+        memoryWriteRoot,
+      );
+      if (coordinatorBlockReason) {
         return {
           block: true,
-          blockReason:
-            "Foreman is coordinator-only. Dispatch coding or shell work to ACP workers instead of using local write/exec tools.",
+          blockReason: coordinatorBlockReason,
         };
       }
 
-      if (toolName !== "sessions_spawn") {
+      if (
+        isOutboundMessageSend(toolName, event.params) &&
+        isDispatchAnnouncementText(messageToolText(event.params))
+      ) {
+        if (!sessionKey) {
+          return {
+            block: true,
+            blockReason:
+              "Dispatch announcement blocked: Foreman session context is missing, so no accepted worker can be verified.",
+          };
+        }
+        const blockReason = await updateState((state) => {
+          const session = sessionStateFor(state, sessionKey);
+          const announcedDispatches = session.announcedDispatches ?? 0;
+          if (session.dispatches.length <= announcedDispatches) {
+            return "Dispatch announcement blocked: Foreman may only announce a worker after sessions_spawn returns accepted.";
+          }
+          session.announcedDispatches = announcedDispatches + 1;
+          session.updatedAt = new Date().toISOString();
+          return undefined;
+        });
+        return blockReason ? { block: true, blockReason } : undefined;
+      }
+
+      if (baseToolName(toolName) !== "sessions_spawn") {
         return undefined;
       }
 
-      const sessionKey = ctx.sessionKey;
       if (!sessionKey) {
         return undefined;
       }
@@ -468,7 +624,7 @@ export default definePluginEntry({
 
     api.on("after_tool_call", async (event, ctx) => {
       if (
-        event.toolName === "sessions_spawn" &&
+        baseToolName(event.toolName) === "sessions_spawn" &&
         event.error &&
         isTargetForeman(ctx, agentId, discordChannelId) &&
         ctx.sessionKey
@@ -490,7 +646,7 @@ export default definePluginEntry({
       }
 
       if (
-        event.toolName !== "sessions_spawn" ||
+        baseToolName(event.toolName) !== "sessions_spawn" ||
         event.error ||
         !isAcceptedSpawn(event.result) ||
         !isTargetForeman(ctx, agentId, discordChannelId) ||
@@ -514,6 +670,7 @@ export default definePluginEntry({
           agentId: stringValue(params.agentId),
           model: stringValue(params.model),
         });
+        session.announcedDispatches ??= 0;
         if (kind === "worker") {
           setPhase(session, "building", now);
         } else if (kind === "check") {
@@ -554,6 +711,10 @@ export default definePluginEntry({
 export const __testing = {
   classifyAssistantText,
   classifySpawn,
+  commandCandidates,
+  commandMatches,
+  coordinatorToolBlockReason,
+  isDispatchAnnouncementText,
   isBuildTrigger,
   isCoordinatorWriteTool,
   isGoTrigger,
