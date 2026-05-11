@@ -59,6 +59,7 @@ describe("foreman-endgame guard helpers", () => {
     expect(__testing.isBuildTrigger(__testing.normalizeCommand("<@123> let's go"))).toBe(true);
     expect(__testing.isBuildTrigger(__testing.normalizeCommand("ship it"))).toBe(true);
     expect(__testing.isBuildTrigger(__testing.normalizeCommand("build"))).toBe(true);
+    expect(__testing.isGoTrigger(__testing.normalizeCommand("[Mon 2026-05-11] go"))).toBe(true);
   });
 
   it("keeps explicit promotion separate from ambiguous ship-it language", () => {
@@ -120,6 +121,11 @@ describe("foreman-endgame guard helpers", () => {
     expect(__testing.classifyAssistantText("production is live after promote-to-koolaid.")).toBe(
       "promoted",
     );
+    expect(
+      __testing.classifyAssistantText(
+        "**Brief: Demo**\n\n**Task plan**\n\nWaiting for explicit **go**.",
+      ),
+    ).toBe("proposed");
   });
 
   it("updates build/go state during direct gateway turns", async () => {
@@ -224,5 +230,33 @@ describe("foreman-endgame guard helpers", () => {
     const state = await readState();
     expect(state.sessions[SESSION_KEY].dispatches).toHaveLength(1);
     expect(state.sessions[SESSION_KEY].announcedDispatches).toBe(1);
+  });
+
+  it("persists build plan and go state from transcript writes", async () => {
+    const { run, readState } = await makeHarness();
+
+    await run("before_message_write", {
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "**Brief: Demo**\n\n**Task plan**\n\nWaiting for explicit **go**.",
+          },
+        ],
+      },
+    });
+    let state = await readState();
+    expect(state.sessions[SESSION_KEY].phase).toBe("proposed");
+
+    await run("before_message_write", {
+      message: {
+        role: "user",
+        content: "[Mon 2026-05-11 00:01 CDT] go",
+      },
+    });
+    state = await readState();
+    expect(state.sessions[SESSION_KEY].phase).toBe("approved");
+    expect(state.sessions[SESSION_KEY].goApprovedAt).toBeTruthy();
   });
 });

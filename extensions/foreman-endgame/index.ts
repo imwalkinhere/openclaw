@@ -1,3 +1,4 @@
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -165,6 +166,7 @@ function getText(value: unknown): string {
 
 function normalizeCommand(text: string): string {
   return text
+    .replace(/^\[[^\]]+\]\s*/u, "")
     .toLowerCase()
     .replace(/<@!?\d+>/gu, " ")
     .replace(/[`*_~]/gu, "")
@@ -229,9 +231,29 @@ async function readStateFile(statePath: string): Promise<StateFile> {
   return emptyState();
 }
 
+function readStateFileSync(statePath: string): StateFile {
+  try {
+    const raw = readFileSync(statePath, "utf8");
+    const parsed = JSON.parse(raw) as Partial<StateFile>;
+    if (parsed?.version === 1 && parsed.sessions && typeof parsed.sessions === "object") {
+      return parsed as StateFile;
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw err;
+    }
+  }
+  return emptyState();
+}
+
 async function writeStateFile(statePath: string, state: StateFile): Promise<void> {
   await mkdir(path.dirname(statePath), { recursive: true });
   await writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+}
+
+function writeStateFileSync(statePath: string, state: StateFile): void {
+  mkdirSync(path.dirname(statePath), { recursive: true });
+  writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
 }
 
 function sessionStateFor(state: StateFile, sessionKey: string): BuildSessionState {
@@ -420,6 +442,15 @@ function extractAcceptedSpawn(result: unknown): Record<string, unknown> {
 function classifyAssistantText(text: string): BuildPhase | undefined {
   const lower = text.toLowerCase();
   if (
+    lower.includes("brief:") &&
+    lower.includes("task plan") &&
+    (lower.includes("waiting for explicit") ||
+      lower.includes("say **go**") ||
+      lower.includes("say go"))
+  ) {
+    return "proposed";
+  }
+  if (
     /koolaid-app-check[\s\S]{0,80}\b(pass|passed|success|succeeded)\b/u.test(lower) ||
     /\b(check|validation)[\s\S]{0,80}\b(pass|passed|success|succeeded)\b/u.test(lower) ||
     lower.includes("awaiting promote") ||
@@ -479,6 +510,12 @@ export default definePluginEntry({
       });
       stateChain = run.catch(() => undefined);
       return await run;
+    };
+    const updateStateSync = <T>(mutator: (state: StateFile) => T): T => {
+      const state = readStateFileSync(statePath);
+      const result = mutator(state);
+      writeStateFileSync(statePath, state);
+      return result;
     };
 
     api.on("agent_turn_prepare", async (event, ctx) => {
@@ -687,19 +724,36 @@ export default definePluginEntry({
         return undefined;
       }
       const role = messageRole(event.message);
+      const text = messageText(event.message);
+      if (role === "user") {
+        try {
+          updateStateSync((state) => {
+            applyHumanCommandTransition(
+              sessionStateFor(state, ctx.sessionKey ?? ""),
+              text,
+              new Date().toISOString(),
+            );
+          });
+        } catch (err) {
+          api.logger.error?.(`foreman-endgame: failed to persist user state: ${String(err)}`);
+        }
+        return undefined;
+      }
       if (role && role !== "assistant") {
         return undefined;
       }
-      const phase = classifyAssistantText(messageText(event.message));
+      const phase = classifyAssistantText(text);
       if (!phase) {
         return undefined;
       }
-      void updateState((state) => {
-        const session = sessionStateFor(state, ctx.sessionKey ?? "");
-        setPhase(session, phase, new Date().toISOString());
-      }).catch((err) => {
+      try {
+        updateStateSync((state) => {
+          const session = sessionStateFor(state, ctx.sessionKey ?? "");
+          setPhase(session, phase, new Date().toISOString());
+        });
+      } catch (err) {
         api.logger.error?.(`foreman-endgame: failed to persist message state: ${String(err)}`);
-      });
+      }
       return undefined;
     });
 
