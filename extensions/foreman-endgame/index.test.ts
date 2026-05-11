@@ -349,4 +349,53 @@ describe("foreman-endgame guard helpers", () => {
     expect(state.sessions[SESSION_KEY].phase).toBe("check-failed");
     expect(state.sessions[SESSION_KEY].lastError).toBe("Internal error");
   });
+
+  it("terminalizes failed Foreman workers even when dispatch bookkeeping is absent", async () => {
+    const { run, readState } = await makeHarness();
+
+    await run("agent_turn_prepare", {
+      prompt: "build",
+      messages: [],
+      queuedInjections: [],
+    });
+    await run("agent_turn_prepare", {
+      prompt: "go",
+      messages: [],
+      queuedInjections: [],
+    });
+    await run("before_tool_call", {
+      toolName: "sessions_spawn",
+      params: {
+        task: "Scaffold app",
+        label: "scaffold",
+        agentId: "codex",
+        model: "gpt-5.4-mini",
+      },
+    });
+
+    let state = await readState();
+    expect(state.sessions[SESSION_KEY].phase).toBe("building");
+    expect(state.sessions[SESSION_KEY].dispatches).toEqual([]);
+
+    await run(
+      "subagent_ended",
+      {
+        targetSessionKey: "agent:codex:acp:worker-missing-bookkeeping",
+        targetKind: "acp",
+        reason: "worker failed",
+        runId: "run-worker-missing-bookkeeping",
+        outcome: "error",
+        error: "ACP_TURN_FAILED",
+      },
+      {
+        requesterSessionKey: SESSION_KEY,
+        childSessionKey: "agent:codex:acp:worker-missing-bookkeeping",
+        runId: "run-worker-missing-bookkeeping",
+      },
+    );
+
+    state = await readState();
+    expect(state.sessions[SESSION_KEY].phase).toBe("check-failed");
+    expect(state.sessions[SESSION_KEY].lastError).toBe("ACP_TURN_FAILED");
+  });
 });

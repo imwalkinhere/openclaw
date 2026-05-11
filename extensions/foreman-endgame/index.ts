@@ -517,7 +517,7 @@ function findDispatchForEndedSubagent(
 
 function applyFailedDispatchTransition(
   session: BuildSessionState,
-  dispatch: DispatchRecord,
+  dispatch: DispatchRecord | undefined,
   error: string,
   now: string,
 ): void {
@@ -526,7 +526,7 @@ function applyFailedDispatchTransition(
     session.updatedAt = now;
     return;
   }
-  if (dispatch.kind === "promote") {
+  if (dispatch?.kind === "promote" || session.phase === "promoting") {
     setPhase(session, "awaiting-promote", now);
     return;
   }
@@ -794,10 +794,10 @@ export default definePluginEntry({
           runId: event.runId ?? ctx.runId,
           childSessionKey: event.targetSessionKey ?? ctx.childSessionKey,
         });
-        if (!dispatch) {
+        if (!dispatch && !isActivePhase(session.phase)) {
           return;
         }
-        const label = dispatch.label ? ` ${dispatch.label}` : "";
+        const label = dispatch?.label ? ` ${dispatch.label}` : "";
         const error = event.error || event.reason || `worker${label} ended with ${event.outcome}`;
         applyFailedDispatchTransition(session, dispatch, error, new Date().toISOString());
       });
