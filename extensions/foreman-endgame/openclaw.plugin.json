@@ -1,0 +1,41 @@
+{
+  "id": "foreman-endgame",
+  "activation": {
+    "onStartup": true
+  },
+  "name": "Foreman Endgame Guard",
+  "description": "Hard gates Foreman build/go/promote workflow, coordinator-only behavior, and dispatch audit state.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "agentId": {
+        "type": "string",
+        "minLength": 1,
+        "default": "foreman"
+      },
+      "statePath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "discordChannelId": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "uiHints": {
+    "agentId": {
+      "label": "Foreman Agent ID",
+      "help": "Agent id whose build/deploy workflow is guarded."
+    },
+    "statePath": {
+      "label": "State Path",
+      "help": "Durable JSON file where Foreman build state and dispatch audit entries are stored."
+    },
+    "discordChannelId": {
+      "label": "Discord Channel ID",
+      "help": "Optional Discord channel id to scope the guard to one operator channel."
+    }
+  }
+}
