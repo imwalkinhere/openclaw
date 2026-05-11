@@ -276,6 +276,16 @@ function setPhase(session: BuildSessionState, phase: BuildPhase, now: string): v
   session.updatedAt = now;
 }
 
+function resetForProposedBuild(session: BuildSessionState, now: string): void {
+  setPhase(session, "proposed", now);
+  session.buildRequestedAt = now;
+  session.goApprovedAt = undefined;
+  session.promoteApprovedAt = undefined;
+  session.dispatches = [];
+  session.announcedDispatches = 0;
+  session.lastError = undefined;
+}
+
 function isActivePhase(phase: BuildPhase): boolean {
   return !["collab", "promoted", "aborted", "check-failed"].includes(phase);
 }
@@ -374,11 +384,7 @@ function applyHumanCommandTransition(
     if (isActivePhase(session.phase)) {
       return `A build is already in progress for this channel (state: ${session.phase}). Finish it, abort it, or promote it before starting another one.`;
     }
-    setPhase(session, "proposed", now);
-    session.buildRequestedAt = now;
-    session.dispatches = [];
-    session.announcedDispatches = 0;
-    session.lastError = undefined;
+    resetForProposedBuild(session, now);
     return undefined;
   }
 
@@ -760,7 +766,12 @@ export default definePluginEntry({
       try {
         updateStateSync((state) => {
           const session = sessionStateFor(state, ctx.sessionKey ?? "");
-          setPhase(session, phase, new Date().toISOString());
+          const now = new Date().toISOString();
+          if (phase === "proposed") {
+            resetForProposedBuild(session, now);
+            return;
+          }
+          setPhase(session, phase, now);
         });
       } catch (err) {
         api.logger.error?.(`foreman-endgame: failed to persist message state: ${String(err)}`);

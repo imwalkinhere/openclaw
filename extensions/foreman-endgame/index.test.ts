@@ -268,5 +268,23 @@ describe("foreman-endgame guard helpers", () => {
     state = await readState();
     expect(state.sessions[SESSION_KEY].phase).toBe("approved");
     expect(state.sessions[SESSION_KEY].goApprovedAt).toBeTruthy();
+
+    await run("before_message_write", {
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "**Brief: New demo**\n\n**Task plan**\n\nWaiting for explicit **go**.",
+          },
+        ],
+      },
+    });
+    state = await readState();
+    expect(state.sessions[SESSION_KEY].phase).toBe("proposed");
+    expect(state.sessions[SESSION_KEY].goApprovedAt).toBeUndefined();
+    expect(state.sessions[SESSION_KEY].promoteApprovedAt).toBeUndefined();
+    expect(state.sessions[SESSION_KEY].dispatches).toEqual([]);
+    expect(state.sessions[SESSION_KEY].announcedDispatches).toBe(0);
   });
 });
