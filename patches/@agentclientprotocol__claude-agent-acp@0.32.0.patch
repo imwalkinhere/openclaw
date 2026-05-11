@@ -37,3 +37,15 @@ index e1d9aa9f0815f57ea2fd299a7f2b8ef0917ca191..875fdfb25fbfa905ca80728355d25a17
                          break;
                      }
                      case "stream_event": {
+@@ -1791,7 +1796,10 @@ async function getAvailableModels(query, models, settingsManager, logger) {
+             currentModel = match;
+         }
+     }
+-    await query.setModel(currentModel.value);
++    if (process.env.CLAUDE_AGENT_ACP_SKIP_INITIAL_SET_MODEL !== "1" &&
++        process.env.CLAUDE_ACP_BAKE_MODEL !== "1") {
++        await query.setModel(currentModel.value);
++    }
+     return {
+         availableModels: models.map((model) => ({
+             modelId: model.value,

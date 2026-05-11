@@ -33,7 +33,7 @@ packageExtensionsChecksum: sha256-n+P/SQo4Pf+dHYpYn1Y6wL4cJEVoVzZ835N0OEp4TM8=
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.32.0':
-    hash: 1fe782f9679d7a725cbe59e51d61419fbb25d4c463d186c43c95644770cb2b98
+    hash: c194bafd5c985b4c9dd5bc9bfd3de70c4993772e1acf271fc867b0161570400a
     path: patches/@agentclientprotocol__claude-agent-acp@0.32.0.patch
   '@whiskeysockets/baileys@7.0.0-rc.9':
     hash: 23ec8efe1484afa57c51b96955ba331d1467521a8e676a18c2690da7e70a6201
@@ -293,7 +293,7 @@ importers:
     dependencies:
       '@agentclientprotocol/claude-agent-acp':
         specifier: 0.32.0
-        version: 0.32.0(patch_hash=1fe782f9679d7a725cbe59e51d61419fbb25d4c463d186c43c95644770cb2b98)
+        version: 0.32.0(patch_hash=c194bafd5c985b4c9dd5bc9bfd3de70c4993772e1acf271fc867b0161570400a)
       '@zed-industries/codex-acp':
         specifier: 0.13.0
         version: 0.13.0
@@ -7864,7 +7864,7 @@ packages:
 
 snapshots:
 
-  '@agentclientprotocol/claude-agent-acp@0.32.0(patch_hash=1fe782f9679d7a725cbe59e51d61419fbb25d4c463d186c43c95644770cb2b98)':
+  '@agentclientprotocol/claude-agent-acp@0.32.0(patch_hash=c194bafd5c985b4c9dd5bc9bfd3de70c4993772e1acf271fc867b0161570400a)':
     dependencies:
       '@agentclientprotocol/sdk': 0.21.0(zod@4.4.3)
       '@anthropic-ai/claude-agent-sdk': 0.2.126(zod@4.4.3)
