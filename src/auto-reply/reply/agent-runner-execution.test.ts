@@ -471,6 +471,66 @@ describe("runAgentTurnWithFallback", () => {
     );
   });
 
+  it("force-reuses CLI session bindings for background task heartbeat events", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "continued" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+    const activeEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "codex-cli": {
+          sessionId: "codex-session-1",
+          extraSystemPromptHash: "previous-prompt-hash",
+          mcpConfigHash: "previous-mcp-hash",
+        },
+      },
+      cliSessionIds: {
+        "codex-cli": "codex-session-1",
+      },
+    } as unknown as SessionEntry;
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "background-task-event",
+          MessageSid: "background-task",
+        } as unknown as TemplateContext,
+      }),
+      isHeartbeat: true,
+      sessionKey: "agent:foreman:discord:channel:ops",
+      getActiveSessionEntry: () => activeEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expect(state.runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: "heartbeat",
+        cliSessionId: "codex-session-1",
+        cliSessionBinding: expect.objectContaining({
+          sessionId: "codex-session-1",
+          forceReuse: true,
+          extraSystemPromptHash: "previous-prompt-hash",
+          mcpConfigHash: "previous-mcp-hash",
+        }),
+      }),
+    );
+  });
+
   it("resolves CLI messageProvider from the live session surface when no origin channel is set", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({

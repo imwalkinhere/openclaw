@@ -96,6 +96,25 @@ const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
 
+function shouldForceCliSessionReuseForSystemEvent(sessionCtx: TemplateContext): boolean {
+  return normalizeLowercaseStringOrEmpty(sessionCtx.Provider) === "background-task-event";
+}
+
+function resolveCliSessionBindingForRun(params: {
+  entry: SessionEntry | undefined;
+  provider: string;
+  sessionCtx: TemplateContext;
+}): ReturnType<typeof getCliSessionBinding> {
+  const binding = getCliSessionBinding(params.entry, params.provider);
+  if (!binding || !shouldForceCliSessionReuseForSystemEvent(params.sessionCtx)) {
+    return binding;
+  }
+  return {
+    ...binding,
+    forceReuse: true,
+  };
+}
+
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
 }
@@ -1395,10 +1414,11 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              cliExecutionProvider,
-            );
+            const cliSessionBinding = resolveCliSessionBindingForRun({
+              entry: params.getActiveSessionEntry(),
+              provider: cliExecutionProvider,
+              sessionCtx: params.sessionCtx,
+            });
             const authProfile = resolveRunAuthProfile(
               params.followupRun.run,
               cliExecutionProvider,
