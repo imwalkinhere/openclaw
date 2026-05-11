@@ -129,7 +129,8 @@ describe("foreman-endgame guard helpers", () => {
       "agent_turn_prepare",
       { prompt: "build", messages: [], queuedInjections: [] },
       {
-        ...FOREMAN_CTX,
+        sessionKey: SESSION_KEY,
+        channelId: "chan-1",
         trigger: "manual",
       },
     );

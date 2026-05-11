@@ -198,7 +198,8 @@ function isTargetForeman(
   agentId: string,
   discordChannelId: string | undefined,
 ): boolean {
-  if (ctx.agentId !== agentId) {
+  const sessionMatchesAgent = ctx.sessionKey?.startsWith(`agent:${agentId}:`) ?? false;
+  if (ctx.agentId !== agentId && !sessionMatchesAgent) {
     return false;
   }
   if (!discordChannelId) {
