@@ -57,6 +57,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   loadSessionStore?: TaskRegistryMaintenanceRuntime["loadSessionStore"];
   resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
+  maybeDeliverTaskTerminalUpdate?: TaskRegistryMaintenanceRuntime["maybeDeliverTaskTerminalUpdate"];
   acpEntry?: AcpSessionStoreEntry["entry"];
   activeCronJobIds?: string[];
   activeRunIds?: string[];
@@ -155,7 +156,7 @@ function createTaskRegistryMaintenanceHarness(params: {
       currentTasks.set(patch.taskId, next);
       return next;
     },
-    maybeDeliverTaskTerminalUpdate: async () => null,
+    maybeDeliverTaskTerminalUpdate: params.maybeDeliverTaskTerminalUpdate ?? (async () => null),
     resolveTaskForLookupToken: () => undefined,
     setTaskCleanupAfterById: (patch) => {
       const current = currentTasks.get(patch.taskId);
@@ -573,5 +574,43 @@ describe("task-registry maintenance issue #60299", () => {
         now: expect.any(Number),
       }),
     );
+  });
+
+  it("retries queued terminal delivery for recent tasks without sweeping stale history", async () => {
+    const now = Date.now();
+    const recentEndedAt = now - 30_000;
+    const staleEndedAt = now - 3 * 60 * 60_000;
+    const recentTask = makeStaleTask({
+      taskId: "task-recent-session-queued",
+      runtime: "acp",
+      status: "failed",
+      deliveryStatus: "session_queued",
+      notifyPolicy: "done_only",
+      createdAt: recentEndedAt - 1_000,
+      startedAt: recentEndedAt - 1_000,
+      endedAt: recentEndedAt,
+      lastEventAt: recentEndedAt,
+    });
+    const staleTask = makeStaleTask({
+      taskId: "task-stale-session-queued",
+      runtime: "acp",
+      status: "failed",
+      deliveryStatus: "session_queued",
+      notifyPolicy: "done_only",
+      createdAt: staleEndedAt - 1_000,
+      startedAt: staleEndedAt - 1_000,
+      endedAt: staleEndedAt,
+      lastEventAt: staleEndedAt,
+    });
+    const deliverMock = vi.fn(async () => null);
+
+    createTaskRegistryMaintenanceHarness({
+      tasks: [recentTask, staleTask],
+      maybeDeliverTaskTerminalUpdate: deliverMock,
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(deliverMock).toHaveBeenCalledTimes(1);
+    expect(deliverMock).toHaveBeenCalledWith(recentTask.taskId);
   });
 });

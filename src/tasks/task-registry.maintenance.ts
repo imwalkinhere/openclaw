@@ -62,6 +62,7 @@ const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
+const TASK_QUEUED_DELIVERY_RETRY_WINDOW_MS = 2 * 60 * 60_000;
 
 /**
  * Number of tasks to process before yielding to the event loop.
@@ -962,6 +963,20 @@ function startScheduledSweep() {
   sweepTaskRegistry().then(clearSweepInProgress, clearSweepInProgress);
 }
 
+function resolveLatestTaskTimestamp(task: TaskRecord): number {
+  return Math.max(task.createdAt, task.startedAt ?? 0, task.endedAt ?? 0, task.lastEventAt ?? 0);
+}
+
+function shouldRetryQueuedTaskTerminalDeliveryDuringMaintenance(
+  task: TaskRecord,
+  now: number,
+): boolean {
+  if (!shouldRetryQueuedTaskTerminalDelivery(task)) {
+    return false;
+  }
+  return resolveLatestTaskTimestamp(task) >= now - TASK_QUEUED_DELIVERY_RETRY_WINDOW_MS;
+}
+
 export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintenanceSummary> {
   taskRegistryMaintenanceRuntime.ensureTaskRegistryReady();
   const now = Date.now();
@@ -1038,7 +1053,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       continue;
     }
     await cleanupTerminalAcpSession(current);
-    if (shouldRetryQueuedTaskTerminalDelivery(current)) {
+    if (shouldRetryQueuedTaskTerminalDeliveryDuringMaintenance(current, now)) {
       await taskRegistryMaintenanceRuntime.maybeDeliverTaskTerminalUpdate(current.taskId);
     }
     if (
