@@ -186,7 +186,6 @@ function taskLedgerGroupKey(task: TaskRecord): string {
     taskCanonicalRunKey(task),
     task.ownerKey,
     task.childSessionKey ?? "",
-    task.parentFlowId ?? "",
   ].join("\u001f");
 }
 
