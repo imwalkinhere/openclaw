@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import { startAcpSpawnParentStreamRelay } from "../agents/acp-spawn-parent-stream.js";
@@ -923,6 +925,75 @@ describe("task-registry", () => {
         expect.stringContaining("Background task done: ACP background task"),
       ]);
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to the owner session delivery context for task completion delivery", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify(
+          {
+            "agent:main:main": {
+              sessionId: "main-session",
+              deliveryContext: {
+                channel: "notifychat",
+                to: "notifychat:123",
+                accountId: "acct-1",
+                threadId: "thread-1",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-session-origin",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-session-origin",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-session-origin")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        }),
+      );
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "notifychat",
+          to: "notifychat:123",
+          accountId: "acct-1",
+          threadId: "thread-1",
+          content: expect.stringContaining("Background task done: ACP background task"),
+        }),
+      );
     });
   });
 

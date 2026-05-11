@@ -328,8 +328,12 @@ function isPromoteTrigger(command: string): boolean {
 }
 
 function isAbortTrigger(command: string): boolean {
-  return ["abort", "cancel", "stop", "pause", "hold", "hold on", "wait", "wait up"].includes(
-    command,
+  return (
+    ["abort", "cancel", "stop", "pause", "hold", "hold on", "wait", "wait up"].includes(command) ||
+    command.startsWith("abort ") ||
+    command.startsWith("cancel ") ||
+    command.startsWith("stop ") ||
+    command.startsWith("pause ")
   );
 }
 
@@ -441,6 +445,13 @@ function extractAcceptedSpawn(result: unknown): Record<string, unknown> {
 
 function classifyAssistantText(text: string): BuildPhase | undefined {
   const lower = text.toLowerCase();
+  if (
+    /\baborted\b/u.test(lower) ||
+    /\bbuild\s+(?:was\s+)?cancelled\b/u.test(lower) ||
+    /\bnot\s+dispatch(?:ing)?\b[\s\S]{0,120}\babort/u.test(lower)
+  ) {
+    return "aborted";
+  }
   if (
     lower.includes("brief:") &&
     lower.includes("task plan") &&
@@ -770,6 +781,7 @@ export const __testing = {
   commandMatches,
   coordinatorToolBlockReason,
   isDispatchAnnouncementText,
+  isAbortTrigger,
   isBuildTrigger,
   isCoordinatorWriteTool,
   isGoTrigger,

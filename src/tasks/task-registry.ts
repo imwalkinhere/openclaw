@@ -1,5 +1,8 @@
 import crypto from "node:crypto";
 import { createRequire } from "node:module";
+import { getRuntimeConfig } from "../config/config.js";
+import { resolveStorePath } from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,7 +11,10 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import {
+  deliveryContextFromSession,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import {
   formatTaskBlockedFollowupMessage,
@@ -865,13 +871,36 @@ function getLinkedFlowForDelivery(task: TaskRecord) {
   return flow;
 }
 
+function resolveOwnerSessionDeliveryContext(
+  sessionKey?: string,
+): TaskDeliveryState["requesterOrigin"] {
+  const normalizedSessionKey = normalizeOptionalString(sessionKey);
+  if (!normalizedSessionKey) {
+    return undefined;
+  }
+  const parsed = parseAgentSessionKey(normalizedSessionKey);
+  if (!parsed?.agentId) {
+    return undefined;
+  }
+  try {
+    const cfg = getRuntimeConfig();
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: parsed.agentId });
+    const store = loadSessionStore(storePath);
+    return normalizeDeliveryContext(deliveryContextFromSession(store[normalizedSessionKey]));
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   const flow = getLinkedFlowForDelivery(task);
+  const taskOrigin = normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin);
   if (flow) {
+    const sessionKey = flow.ownerKey.trim();
     return {
-      sessionKey: flow.ownerKey.trim(),
+      sessionKey,
       requesterOrigin: normalizeDeliveryContext(
-        flow.requesterOrigin ?? taskDeliveryStates.get(task.taskId)?.requesterOrigin,
+        flow.requesterOrigin ?? taskOrigin ?? resolveOwnerSessionDeliveryContext(sessionKey),
       ),
       flowId: flow.flowId,
     };
@@ -881,7 +910,9 @@ function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   }
   return {
     sessionKey: task.ownerKey.trim(),
-    requesterOrigin: normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin),
+    requesterOrigin: normalizeDeliveryContext(
+      taskOrigin ?? resolveOwnerSessionDeliveryContext(task.ownerKey),
+    ),
   };
 }
 

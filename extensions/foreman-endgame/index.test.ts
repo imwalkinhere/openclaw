@@ -62,6 +62,13 @@ describe("foreman-endgame guard helpers", () => {
     expect(__testing.isGoTrigger(__testing.normalizeCommand("[Mon 2026-05-11] go"))).toBe(true);
   });
 
+  it("recognizes conversational abort commands", () => {
+    expect(__testing.isAbortTrigger(__testing.normalizeCommand("abort"))).toBe(true);
+    expect(__testing.isAbortTrigger(__testing.normalizeCommand("abort this drill"))).toBe(true);
+    expect(__testing.isAbortTrigger(__testing.normalizeCommand("cancel the build"))).toBe(true);
+    expect(__testing.isAbortTrigger(__testing.normalizeCommand("stop for now"))).toBe(true);
+  });
+
   it("keeps explicit promotion separate from ambiguous ship-it language", () => {
     expect(__testing.isGoTrigger(__testing.normalizeCommand("ok ship it"))).toBe(true);
     expect(__testing.isPromoteTrigger(__testing.normalizeCommand("promote"))).toBe(true);
@@ -120,6 +127,9 @@ describe("foreman-endgame guard helpers", () => {
     );
     expect(__testing.classifyAssistantText("production is live after promote-to-koolaid.")).toBe(
       "promoted",
+    );
+    expect(__testing.classifyAssistantText("🛑 Aborted `demo`. I will not dispatch.")).toBe(
+      "aborted",
     );
     expect(
       __testing.classifyAssistantText(
