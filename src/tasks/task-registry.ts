@@ -892,6 +892,19 @@ function resolveOwnerSessionDeliveryContext(
   }
 }
 
+function hasCompleteDeliveryContext(origin?: TaskDeliveryState["requesterOrigin"]): boolean {
+  return Boolean(origin?.channel?.trim() && origin.to?.trim());
+}
+
+function resolveBestDeliveryContext(
+  ...candidates: Array<TaskDeliveryState["requesterOrigin"] | undefined>
+): TaskDeliveryState["requesterOrigin"] {
+  const normalized = candidates
+    .map((candidate) => normalizeDeliveryContext(candidate))
+    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate));
+  return normalized.find(hasCompleteDeliveryContext) ?? normalized[0];
+}
+
 function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   const flow = getLinkedFlowForDelivery(task);
   const taskOrigin = normalizeDeliveryContext(taskDeliveryStates.get(task.taskId)?.requesterOrigin);
@@ -899,8 +912,10 @@ function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
     const sessionKey = flow.ownerKey.trim();
     return {
       sessionKey,
-      requesterOrigin: normalizeDeliveryContext(
-        flow.requesterOrigin ?? taskOrigin ?? resolveOwnerSessionDeliveryContext(sessionKey),
+      requesterOrigin: resolveBestDeliveryContext(
+        flow.requesterOrigin,
+        taskOrigin,
+        resolveOwnerSessionDeliveryContext(sessionKey),
       ),
       flowId: flow.flowId,
     };
@@ -910,8 +925,9 @@ function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
   }
   return {
     sessionKey: task.ownerKey.trim(),
-    requesterOrigin: normalizeDeliveryContext(
-      taskOrigin ?? resolveOwnerSessionDeliveryContext(task.ownerKey),
+    requesterOrigin: resolveBestDeliveryContext(
+      taskOrigin,
+      resolveOwnerSessionDeliveryContext(task.ownerKey),
     ),
   };
 }

@@ -997,6 +997,81 @@ describe("task-registry", () => {
     });
   });
 
+  it("ignores incomplete flow delivery origins when the owner session has a complete target", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      const sessionsDir = path.join(root, "agents", "main", "sessions");
+      await mkdir(sessionsDir, { recursive: true });
+      await writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify(
+          {
+            "agent:main:main": {
+              sessionId: "main-session",
+              deliveryContext: {
+                channel: "notifychat",
+                to: "notifychat:123",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      resetTaskFlowRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/task-registry",
+        goal: "Flow with partial delivery origin",
+        requesterOrigin: {
+          channel: "notifychat",
+        },
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:acp:child",
+        runId: "run-flow-partial-origin",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-flow-partial-origin",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-flow-partial-origin")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        }),
+      );
+      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "notifychat",
+          to: "notifychat:123",
+          content: expect.stringContaining("Background task done: ACP background task"),
+        }),
+      );
+    });
+  });
+
   it("retries queued task completion delivery once the owner session has delivery context", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
