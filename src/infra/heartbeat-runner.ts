@@ -91,9 +91,11 @@ import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
+  buildBackgroundTaskEventPrompt,
   buildCronEventPrompt,
   buildExecEventPrompt,
   isCronSystemEvent,
+  isBackgroundTaskEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
@@ -734,6 +736,7 @@ function normalizeHeartbeatToolNotification(
 type HeartbeatWakePayloadFlags = {
   isExecEventWake: boolean;
   isCronWake: boolean;
+  isBackgroundTaskWake: boolean;
   isWakePayload: boolean;
 };
 
@@ -814,6 +817,9 @@ function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSourc
   if (trimmed === "exec-event") {
     return "exec-event";
   }
+  if (trimmed === "background-task" || trimmed === "background-task-blocked") {
+    return trimmed;
+  }
   if (trimmed.startsWith("cron:")) {
     return "cron";
   }
@@ -832,10 +838,13 @@ function resolveHeartbeatWakePayloadFlags(params: {
 }): HeartbeatWakePayloadFlags {
   const source = params.source ?? inferHeartbeatWakeSourceFromReason(params.reason);
   const reason = (params.reason ?? "").trim();
+  const isBackgroundTaskWake = source === "background-task" || source === "background-task-blocked";
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isBackgroundTaskWake,
+    isWakePayload:
+      source === "hook" || source === "acp-spawn" || isBackgroundTaskWake || reason === "wake",
   };
 }
 
@@ -956,6 +965,7 @@ type HeartbeatPromptResolution = {
   hasExecCompletion: boolean;
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasBackgroundTaskEvents: boolean;
   hasDueCommitments: boolean;
   usesHeartbeatResponseTool: boolean;
 };
@@ -1042,10 +1052,17 @@ function resolveHeartbeatRunPrompt(params: {
         .filter((event) => isExecCompletionEvent(event.text))
         .map((event) => event.text)
     : [];
+  const backgroundTaskEvents =
+    params.preflight.isBackgroundTaskWake && params.preflight.shouldInspectPendingEvents
+      ? pendingEventEntries
+          .filter((event) => isBackgroundTaskEvent(event.text))
+          .map((event) => event.text)
+      : [];
   const hasExecCompletion = execEvents.length > 0;
   const hasRelayableExecCompletion =
     params.canRelayToUser && execEvents.some((event) => isRelayableExecCompletionEvent(event));
   const hasCronEvents = cronEvents.length > 0;
+  const hasBackgroundTaskEvents = backgroundTaskEvents.length > 0;
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
     useHeartbeatResponseTool: false,
@@ -1077,6 +1094,7 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasBackgroundTaskEvents: false,
         hasDueCommitments: false,
         usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       };
@@ -1087,6 +1105,7 @@ ${completionInstruction}`;
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
+        hasBackgroundTaskEvents: false,
         hasDueCommitments,
         usesHeartbeatResponseTool: false,
       };
@@ -1096,6 +1115,7 @@ ${completionInstruction}`;
       hasExecCompletion: false,
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
+      hasBackgroundTaskEvents: false,
       hasDueCommitments: false,
       usesHeartbeatResponseTool: false,
     };
@@ -1112,9 +1132,14 @@ ${completionInstruction}`;
           deliverToUser: params.canRelayToUser,
           useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
         })
-      : baseUsesHeartbeatResponseTool
-        ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
-        : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+      : hasBackgroundTaskEvents
+        ? buildBackgroundTaskEventPrompt(backgroundTaskEvents, {
+            deliverToUser: params.canRelayToUser,
+            useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
+          })
+        : baseUsesHeartbeatResponseTool
+          ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
+          : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = commitmentPrompt
     ? `${appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir)}\n\n${commitmentPrompt}`
     : appendHeartbeatWorkspacePathHint(basePrompt, params.workspaceDir);
@@ -1124,6 +1149,7 @@ ${completionInstruction}`;
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasBackgroundTaskEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
   };
@@ -1133,6 +1159,7 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   preflight: HeartbeatPreflight;
   hasExecCompletion: boolean;
   hasCronEvents: boolean;
+  hasBackgroundTaskEvents: boolean;
 }): SystemEvent[] {
   const { preflight } = params;
   if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
@@ -1148,7 +1175,10 @@ function selectSystemEventsConsumedByHeartbeat(params: {
         isCronSystemEvent(event.text),
     );
   }
-  return preflight.pendingEventEntries;
+  if (params.hasBackgroundTaskEvents) {
+    return preflight.pendingEventEntries.filter((event) => isBackgroundTaskEvent(event.text));
+  }
+  return [];
 }
 
 export async function runHeartbeatOnce(opts: {
@@ -1341,6 +1371,7 @@ export async function runHeartbeatOnce(opts: {
     hasExecCompletion,
     hasRelayableExecCompletion,
     hasCronEvents,
+    hasBackgroundTaskEvents,
     hasDueCommitments,
     usesHeartbeatResponseTool,
   } = resolveHeartbeatRunPrompt({
@@ -1361,6 +1392,7 @@ export async function runHeartbeatOnce(opts: {
     preflight,
     hasExecCompletion,
     hasCronEvents,
+    hasBackgroundTaskEvents,
   });
 
   // If no tasks are due, skip heartbeat entirely
@@ -1497,7 +1529,13 @@ export async function runHeartbeatOnce(opts: {
     OriginatingTo: !suppressOriginatingContext ? delivery.to : undefined,
     AccountId: delivery.accountId,
     MessageThreadId: delivery.threadId,
-    Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
+    Provider: hasExecCompletion
+      ? "exec-event"
+      : hasBackgroundTaskEvents
+        ? "background-task-event"
+        : hasCronEvents
+          ? "cron-event"
+          : "heartbeat",
     SessionKey: runSessionKey,
     ForceSenderIsOwnerFalse: hasExecCompletion || hasUntrustedPendingEvents,
   };

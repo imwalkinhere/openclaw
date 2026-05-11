@@ -397,6 +397,50 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
   });
 
+  it("uses background-task prompts to continue worker-driven workflows", async () => {
+    const { result, sendTelegram, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-background-task-",
+      replyText: "Worker completed; continuing the plan.",
+      reason: "background-task",
+      enqueue: (key) => {
+        enqueueSystemEvent(
+          "Background task done: ACP background task (run run-1234). Created the app skeleton.",
+          { sessionKey: key, trusted: false },
+        );
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("background-task-event");
+    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
+    expect(calledCtx?.Body).toContain("background workers you dispatched have completed");
+    expect(calledCtx?.Body).toContain("run run-1234");
+    expect(calledCtx?.Body).toContain("continue the active workflow");
+    expect(sendTelegram).toHaveBeenCalled();
+    expect(peekSystemEvents(sessionKey)).toEqual([]);
+  });
+
+  it("consumes background-task events without dropping generic system events", async () => {
+    const { result, calledCtx, sessionKey } = await runHeartbeatCase({
+      tmpPrefix: "openclaw-background-task-preserve-generic-",
+      replyText: "Worker completed; continuing the plan.",
+      reason: "background-task",
+      enqueue: (key) => {
+        enqueueSystemEvent(
+          "Background task done: ACP background task (run run-5678). Tests passed.",
+          { sessionKey: key, trusted: false },
+        );
+        enqueueSystemEvent("Node connected", { sessionKey: key });
+      },
+    });
+
+    expect(result.status).toBe("ran");
+    expect(calledCtx?.Provider).toBe("background-task-event");
+    expect(calledCtx?.Body).toContain("run run-5678");
+    expect(calledCtx?.Body).not.toContain("Node connected");
+    expect(peekSystemEvents(sessionKey)).toEqual(["Node connected"]);
+  });
+
   it("classifies hook:wake exec completions as exec-event prompts", async () => {
     const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
       tmpPrefix: "openclaw-hook-exec-",

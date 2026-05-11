@@ -179,6 +179,66 @@ function taskCanonicalRunKey(task: TaskRecord): string {
   return task.runId ?? task.sourceId ?? task.taskId;
 }
 
+function taskLedgerGroupKey(task: TaskRecord): string {
+  return [
+    task.runtime,
+    task.scopeKind,
+    taskCanonicalRunKey(task),
+    task.ownerKey,
+    task.childSessionKey ?? "",
+    task.parentFlowId ?? "",
+  ].join("\u001f");
+}
+
+function taskDeliveryStatusRank(status: TaskRecord["deliveryStatus"]): number {
+  switch (status) {
+    case "delivered":
+      return 6;
+    case "session_queued":
+      return 5;
+    case "pending":
+      return 4;
+    case "failed":
+      return 3;
+    case "parent_missing":
+      return 2;
+    case "not_applicable":
+      return 1;
+  }
+}
+
+function pickTaskLedgerRecord(left: TaskRecord, right: TaskRecord): TaskRecord {
+  const deliveryRankDiff =
+    taskDeliveryStatusRank(right.deliveryStatus) - taskDeliveryStatusRank(left.deliveryStatus);
+  if (deliveryRankDiff > 0) {
+    return right;
+  }
+  if (deliveryRankDiff < 0) {
+    return left;
+  }
+  const updatedAtDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
+  if (updatedAtDiff > 0) {
+    return right;
+  }
+  if (updatedAtDiff < 0) {
+    return left;
+  }
+  if (right.createdAt > left.createdAt) {
+    return right;
+  }
+  return left;
+}
+
+function dedupeTaskLedgerRecords(tasks: TaskRecord[]): TaskRecord[] {
+  const byCanonicalRun = new Map<string, TaskRecord>();
+  for (const task of tasks) {
+    const key = taskLedgerGroupKey(task);
+    const previous = byCanonicalRun.get(key);
+    byCanonicalRun.set(key, previous ? pickTaskLedgerRecord(previous, task) : task);
+  }
+  return [...byCanonicalRun.values()];
+}
+
 function taskWorkerAgentId(task: TaskRecord): string | undefined {
   return parseAgentSessionKey(task.childSessionKey)?.agentId ?? task.agentId;
 }
@@ -214,7 +274,9 @@ export function buildTasksLedgerJsonPayload(opts: TasksLedgerJsonArgs) {
     owner: normalizeFilter(opts.owner),
     label: normalizeFilter(opts.label),
   };
-  const tasks = listTaskJsonRecords().filter((task) => taskMatchesLedgerFilters(task, filters));
+  const tasks = dedupeTaskLedgerRecords(
+    listTaskJsonRecords().filter((task) => taskMatchesLedgerFilters(task, filters)),
+  );
   const linkedFlowIds = new Set(
     tasks.map((task) => task.parentFlowId).filter((flowId): flowId is string => Boolean(flowId)),
   );

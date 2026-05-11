@@ -7,9 +7,12 @@ import {
 import {
   createTaskRecord,
   linkTaskToFlowById,
+  reloadTaskRegistryFromStore,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
+import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   tasksAuditJsonCommand,
@@ -202,6 +205,96 @@ describe("tasks JSON commands", () => {
       expect(payload.runs[0]).not.toHaveProperty("active_path");
       expect(payload.flowCount).toBe(1);
       expect(payload.flows).toEqual([expect.objectContaining({ id: flow.flowId })]);
+    });
+  });
+
+  it("deduplicates split-backend rows for the same canonical ledger run", async () => {
+    await withTaskJsonStateDir(async () => {
+      const ownerKey = "agent:foreman:discord:channel:123";
+      const now = Date.now();
+      const shadow: TaskRecord = {
+        taskId: "task-shadow",
+        runtime: "acp",
+        requesterSessionKey: ownerKey,
+        ownerKey,
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        agentId: "foreman",
+        runId: "run-split-1",
+        label: "stockbot-shadow",
+        task: "Build the stockbot smoke app",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 5_000,
+        startedAt: now - 4_000,
+        endedAt: now - 1_000,
+        lastEventAt: now - 1_000,
+        terminalSummary: "Shadow row should not win",
+      };
+      const deliverable: TaskRecord = {
+        ...shadow,
+        taskId: "task-deliverable",
+        label: "stockbot-deliverable",
+        deliveryStatus: "session_queued",
+        notifyPolicy: "done_only",
+        createdAt: now - 6_000,
+        startedAt: now - 5_000,
+        endedAt: now - 2_000,
+        lastEventAt: now - 2_000,
+        terminalSummary: "Deliverable row wins",
+      };
+
+      configureTaskRegistryRuntime({
+        store: {
+          loadSnapshot: () => ({
+            tasks: new Map([
+              [shadow.taskId, shadow],
+              [deliverable.taskId, deliverable],
+            ]),
+            deliveryStates: new Map(),
+          }),
+          saveSnapshot: () => {},
+          close: () => {},
+        },
+      });
+      reloadTaskRegistryFromStore();
+
+      const runtime = createRuntime();
+      await tasksLedgerJsonCommand(
+        {
+          json: true,
+          runtime: "acp",
+          agent: "codex",
+          owner: ownerKey,
+          label: "stockbot",
+        },
+        runtime,
+      );
+
+      const payload = readJsonLog(runtime) as {
+        count: number;
+        summary: { terminal: number; byRuntime: Record<string, number> };
+        runs: Array<{
+          canonicalRunKey: string;
+          deliveryStatus: string;
+          label: string;
+          terminalSummary: string;
+          workerAgentId: string;
+        }>;
+      };
+      expect(payload.count).toBe(1);
+      expect(payload.summary.terminal).toBe(1);
+      expect(payload.summary.byRuntime.acp).toBe(1);
+      expect(payload.runs).toEqual([
+        expect.objectContaining({
+          canonicalRunKey: "run-split-1",
+          workerAgentId: "codex",
+          deliveryStatus: "session_queued",
+          label: "stockbot-deliverable",
+          terminalSummary: "Deliverable row wins",
+        }),
+      ]);
     });
   });
 

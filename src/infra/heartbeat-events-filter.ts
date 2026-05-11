@@ -3,6 +3,7 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const MAX_EXEC_EVENT_PROMPT_CHARS = 8_000;
+const MAX_BACKGROUND_TASK_EVENT_PROMPT_CHARS = 10_000;
 const STRUCTURED_EXEC_COMPLETION_EVENT_RE =
   /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*))?$/i;
 
@@ -165,6 +166,53 @@ export function buildExecEventPrompt(
     "\n\n" +
     "Please relay the command output to the user in a helpful way. If the command succeeded, share the relevant output. " +
     "If it failed, explain what went wrong."
+  );
+}
+
+function formatEventPromptText(pendingEvents: string[], maxChars: number): string {
+  const eventText = pendingEvents
+    .map((event) => event.trim())
+    .filter(Boolean)
+    .join("\n\n");
+  return eventText.length > maxChars ? `${eventText.slice(0, maxChars)}\n\n[truncated]` : eventText;
+}
+
+export function isBackgroundTaskEvent(evt: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(evt.trimStart());
+  return (
+    normalized.startsWith("background task ") || normalized.startsWith("task needs follow-up:")
+  );
+}
+
+export function buildBackgroundTaskEventPrompt(
+  pendingEvents: string[],
+  opts?: { deliverToUser?: boolean; useHeartbeatResponseTool?: boolean },
+): string {
+  const deliverToUser = opts?.deliverToUser ?? true;
+  const useHeartbeatResponseTool = opts?.useHeartbeatResponseTool ?? false;
+  const eventText = formatEventPromptText(pendingEvents, MAX_BACKGROUND_TASK_EVENT_PROMPT_CHARS);
+  if (!eventText) {
+    if (useHeartbeatResponseTool) {
+      return (
+        "A background worker completion event was triggered, but no worker result was found. " +
+        `${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS} Do not mention or reuse output from any earlier run.`
+      );
+    }
+    return (
+      "A background worker completion event was triggered, but no worker result was found. " +
+      "Reply HEARTBEAT_OK only. Do not mention or reuse output from any earlier run."
+    );
+  }
+  const visibilityInstruction = deliverToUser
+    ? "Relay the worker outcome to the user clearly."
+    : "Handle the worker outcome internally; user delivery is disabled for this run.";
+  return (
+    "One or more background workers you dispatched have completed. Their completion details are:\n\n" +
+    eventText +
+    "\n\n" +
+    `${visibilityInstruction} Then continue the active workflow from the existing session context: ` +
+    "if the completed worker unblocks another planned worker, dispatch the next worker; if all build workers are done, run the required validation; if anything failed or blocked, stop and report the failure. " +
+    "Do not claim a worker is still running if the event says it completed."
   );
 }
 
